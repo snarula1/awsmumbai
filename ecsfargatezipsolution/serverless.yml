@@ -1,0 +1,32 @@
+service: job-service
+
+provider:
+  name: aws
+  runtime: python3.12
+  region: us-east-1
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: 's3:*'
+          Resource: '*'
+
+functions:
+  lambda1:
+    name: lambda1_prepare_job
+    description: lambda1_prepare_job
+    handler: handler.lambda1_prepare_job
+    memorySize: 512
+    timeout: 10
+  lambda2:
+    name: lambda2_get_job
+    description: lambda2_get_job
+    handler: handler.lambda_handler
+    memorySize: 512
+    timeout: 10
+  lambda3:
+    name: lambda3_get_uploadurl_for_finished_job
+    description: lambda3_get_uploadurl_for_finished_job
+    handler: handler.lambda_handler
+    memorySize: 512
+    timeout: 10
