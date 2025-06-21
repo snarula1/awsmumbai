@@ -1,11 +1,21 @@
-import psutil
 import logging
+
+# Try to import psutil, but don't fail if it's not available
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+    logging.warning("psutil module not found. System statistics will not be available.")
 
 def get_system_stats():
     """
     Get system statistics in a safe way that won't crash if access is denied
     Returns a dictionary with memory and CPU usage information
     """
+    if not HAS_PSUTIL:
+        return {'error': 'psutil module not available'}
+    
     stats = {}
     
     try:
@@ -34,6 +44,9 @@ def format_system_stats():
     Get and format system statistics as a string
     Returns a formatted string with system stats
     """
+    if not HAS_PSUTIL:
+        return "System stats unavailable (psutil not installed)"
+    
     try:
         stats = get_system_stats()
         

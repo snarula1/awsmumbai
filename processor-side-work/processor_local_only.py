@@ -8,10 +8,17 @@ import zipfile
 import shutil
 import threading
 import queue
-import psutil
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
+
+# Try to import psutil, but don't fail if it's not available
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+    logging.warning("psutil module not found. System statistics will not be available.")
 
 # Configuration
 SIMULTANEOUS_DOWNLOADS_MAX =  4  # Number of files to download simultaneously
@@ -140,11 +147,7 @@ def step_4_create_files_subfolder(local_folder_path, job_id):
 def download_single_file(file_obj, files_folder_path, index, total_files, max_retries=1):
     """Download a single file using the presigned URL with retry logic"""
     # Import system_stats here to avoid circular imports
-    try:
-        from system_stats import format_system_stats
-        has_system_stats = True
-    except ImportError:
-        has_system_stats = False
+    from system_stats import format_system_stats
     
     file_name = file_obj.get("file_name")
     presigned_url = file_obj.get("presigned_url")
@@ -168,14 +171,10 @@ def download_single_file(file_obj, files_folder_path, index, total_files, max_re
             # Get current thread name for tracking
             thread_name = threading.current_thread().name
             
-            # Get system stats if available
-            system_stats_str = ""
-            if has_system_stats:
-                try:
-                    system_stats_str = format_system_stats()
-                except Exception as e:
-                    system_stats_str = f"Error getting system stats: {str(e)}"
+            # Get system stats
+            system_stats_str = format_system_stats()
             
+            # Log download start with system stats
             logging.info(f"Downloading file {index+1}/{total_files}: {file_name} [Thread: {thread_name}] {system_stats_str}")
             
             # Create request with headers
@@ -185,15 +184,9 @@ def download_single_file(file_obj, files_folder_path, index, total_files, max_re
             with urllib.request.urlopen(req) as response, open(local_file_path, 'wb') as out_file:
                 out_file.write(response.read())
             
-            # Get system stats after download if available
-            if has_system_stats:
-                try:
-                    system_stats_str = format_system_stats()
-                    logging.info(f"Successfully saved file to: {local_file_path} {system_stats_str}")
-                except Exception:
-                    logging.info(f"Successfully saved file to: {local_file_path}")
-            else:
-                logging.info(f"Successfully saved file to: {local_file_path}")
+            # Get system stats after download
+            system_stats_str = format_system_stats()
+            logging.info(f"Successfully saved file to: {local_file_path} {system_stats_str}")
                 
             return local_file_path
             
