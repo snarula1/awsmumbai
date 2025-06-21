@@ -1,0 +1,26 @@
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Effect": "Allow",
+			"Action": [
+				"iam:PutRolePolicy",
+				"iam:CreateRole",
+				"iam:DeleteRole",
+				"iam:PassRole",
+				"iam:GetRole",
+				"iam:TagRole",
+				"logs:CreateLogGroup",
+				"logs:TagResource",
+				"apigateway:PUT",
+				"apigateway:POST",
+				"apigateway:GET",
+				"apigateway:DELETE",
+				"apigateway:PATCH",
+				"apigateway:UpdateRestApiPolicy",
+				"cloudformation:TagResource"
+			],
+			"Resource": "*"
+		}
+	]
+}

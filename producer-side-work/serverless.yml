@@ -1,0 +1,61 @@
+service: requestor-job-service-${self:custom.suffix}
+
+custom:
+  suffix: ${env:DEPLOY_SUFFIX, '202506170115'}
+  stackName: ${env:STACK_NAME, '${self:custom.suffix}'}
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: us-east-1
+  environment:
+    S3_BUCKET_NAME: ${env:S3_BUCKET_NAME, 'myrootfolder'}
+    API_GATEWAY_URL: ${env:API_GATEWAY_URL, 'https://yknlfsjyye.execute-api.us-east-1.amazonaws.com'}
+    API_STAGE: ${env:API_STAGE, 'dev'}
+    UPLOAD_URL_PATH: ${env:UPLOAD_URL_PATH, 'get-upload-url'}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: 's3:*'
+          Resource: '*'
+        - Effect: Allow
+          Action:
+            - 'logs:CreateLogGroup'
+            - 'logs:CreateLogStream'
+            - 'logs:PutLogEvents'
+            - 'logs:TagResource'
+            - 'apigateway:PUT'
+            - 'apigateway:POST'
+            - 'apigateway:GET'
+            - 'apigateway:DELETE'
+            - 'apigateway:PATCH'
+            - 'apigateway:UpdateRestApiPolicy'
+          Resource: '*'
+
+functions:
+  prepareJob:
+    name: prepare_job_from_requestor_${self:custom.suffix}
+    handler: handler.lambda_handler
+    description: Creates a job request with presigned URLs for files
+    memorySize: 256
+    timeout: 30
+    events:
+      - http:
+          path: prepare-job
+          method: get
+          cors: true
+          integration: lambda
+          
+  getUploadUrl:
+    name: get_upload_url_${self:custom.suffix}
+    handler: upload_handler.lambda_handler
+    description: Provides a presigned URL for uploading processed zip files
+    memorySize: 256
+    timeout: 10
+    events:
+      - http:
+          path: get-upload-url
+          method: get
+          cors: true
+          integration: lambda-proxy

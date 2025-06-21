@@ -1,0 +1,4 @@
+# Ignore process_work folder as it contains data files
+processor-side-work/process_work/
+producer-side-work/.serverless/
+ecsfargatezipsolution/
