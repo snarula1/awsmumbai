@@ -20,26 +20,24 @@ CALLBACK_URL = "https://yknlfsjyye.execute-api.us-east-1.amazonaws.com/dev/get-u
 #     "smallfilezip/file4.pdf"
 # ]
 
-HARDCODED_KEYS = [
-    "largefileziptest/my1gbfile1.pdf",
-    "largefileziptest/my1gbfile2.pdf",
-    "largefileziptest/my1gbfile3.pdf",
-    "largefileziptest/my1gbfile4.pdf",
-    "largefileziptest/my1gbfile5.pdf",
-    "largefileziptest/my1gbfile6.pdf",
-    "largefileziptest/my1gbfile7.pdf",
-    "largefileziptest/my1gbfile8.pdf",
-    "largefileziptest/my1gbfile9.pdf",
-    "largefileziptest/my1gbfile10.pdf"
-]
-def get_large_hardcoded_keys():
-    """Generate keys for 10 large files (1GB to 10GB)"""
-    return [f"largefileziptest/my1gbfile{n}.pdf" for n in range(1, 11)]
+def get_small_hardcoded_keys():
+    """Generate keys for small files"""
+    return [
+        "smallfilezip/file1.pdf",
+        "smallfilezip/file2.pdf",
+        "smallfilezip/file3.pdf",
+        "smallfilezip/file4.pdf"
+    ]
 
+def get_large_hardcoded_keys():
+    """Generate keys for 100 large files (1GB each)"""
+    return [f"largefileziptest/my1gbfile{n}.pdf" for n in range(1, 101)]
+
+# Default to small files
+SMALL_HARDCODED_KEYS = get_small_hardcoded_keys()
 # Large file keys for testing
 LARGE_HARDCODED_KEYS = get_large_hardcoded_keys()
-# Uncomment the line below to use large files by default
-# HARDCODED_KEYS = LARGE_HARDCODED_KEYS
+HARDCODED_KEYS = LARGE_HARDCODED_KEYS
 def validate_s3_object_exists(bucket, key):
     """Check if an object exists in S3 before generating a presigned URL"""
     try:
@@ -83,11 +81,10 @@ def lambda_handler(event, context):
     job_id = str(uuid.uuid4())
     file_object_list = []
     
-    # Check if we should use large files
-    use_large_files = event.get('queryStringParameters', {}).get('large') == 'true'
-    keys_to_use = LARGE_HARDCODED_KEYS if use_large_files else HARDCODED_KEYS
+    # Use the default keys (which are set to large files)
+    keys_to_use = HARDCODED_KEYS
     
-    logger.info(f"Using {'large' if use_large_files else 'small'} files for job {job_id}")
+    logger.info(f"Using {len(keys_to_use)} files for job {job_id}")
 
     errors = []
     for key in keys_to_use:
