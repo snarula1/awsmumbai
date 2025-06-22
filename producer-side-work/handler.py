@@ -3,6 +3,8 @@ import uuid
 import json
 import os
 import logging
+import hashlib
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -30,8 +32,11 @@ def get_small_hardcoded_keys():
     ]
 
 def get_large_hardcoded_keys():
-    """Generate keys for 100 large files (1GB each)"""
-    return [f"largefileziptest/my1gbfile{n}.pdf" for n in range(1, 101)]
+    """Generate keys for a random number (2-5) of large files (1GB each)"""
+    # Generate a random number between 2 and 5
+    k = random.randint(2, 5)
+    logger.info(f"Randomly selected {k} files for this job")
+    return [f"largefileziptest/my1gbfile{n}.pdf" for n in range(1, k+1)]
 
 # Default to small files
 SMALL_HARDCODED_KEYS = get_small_hardcoded_keys()
@@ -59,11 +64,31 @@ def validate_s3_object_exists(bucket, key):
         logger.error(f"Unexpected error validating S3 object {bucket}/{key}: {str(e)}")
         return False
 
+def get_s3_object_metadata(bucket, key):
+    """Get metadata for an S3 object in a serializable format"""
+    try:
+        # Use head_object to get metadata without downloading the object
+        response = s3.head_object(Bucket=bucket, Key=key)
+        
+        # Create a serializable version of the metadata
+        metadata = {
+            'ETag': response.get('ETag', '').strip('"'),
+            'ContentLength': response.get('ContentLength', 0),
+            'LastModified': response.get('LastModified', '').isoformat() if hasattr(response.get('LastModified', ''), 'isoformat') else str(response.get('LastModified', ''))
+        }
+        
+        return metadata
+    except Exception as e:
+        logger.error(f"Error getting metadata for {bucket}/{key}: {str(e)}")
+        return None
+
 def generate_presigned_url(bucket, key, expiration=36000):
     """Generate a presigned URL after validating the object exists"""
     # First validate that the object exists
-    if not validate_s3_object_exists(bucket, key):
+    exists = validate_s3_object_exists(bucket, key)
+    if not exists:
         logger.warning(f"Object {bucket}/{key} does not exist, presigned URL may not work")
+        return None
         
     # Generate the presigned URL
     try:
@@ -77,9 +102,49 @@ def generate_presigned_url(bucket, key, expiration=36000):
         logger.error(f"Error generating presigned URL for {bucket}/{key}: {str(e)}")
         return None
 
+def generate_files_hash(file_metadata_list):
+    """Generate a hash based on file metadata to identify duplicate file sets"""
+    try:
+        if not file_metadata_list:
+            # Return a random integer if no metadata is provided
+            return random.randint(1, 100)
+        
+        # Create a string with key metadata fields
+        metadata_str = ""
+        for metadata in file_metadata_list:
+            if metadata:
+                try:
+                    # Use ETag, LastModified, and ContentLength as they uniquely identify a file version
+                    etag = str(metadata.get('ETag', ''))
+                    last_modified = str(metadata.get('LastModified', ''))
+                    content_length = str(metadata.get('ContentLength', 0))
+                    
+                    # Combine metadata fields for this file
+                    file_metadata_str = f"{etag}|{last_modified}|{content_length}"
+                    metadata_str += file_metadata_str + ";"
+                except Exception:
+                    # Skip this metadata entry if there's an error
+                    continue
+        
+        # Generate a hash of the combined metadata string
+        if metadata_str:
+            try:
+                hash_obj = hashlib.md5(metadata_str.encode())
+                return hash_obj.hexdigest()
+            except Exception:
+                # Fall back to random integer if hashing fails
+                return random.randint(1, 100)
+        
+        return random.randint(1, 100)
+    except Exception as e:
+        # Catch any unexpected errors and return a random integer
+        logger.error(f"Error generating hash: {str(e)}")
+        return random.randint(1, 100)
+
 def lambda_handler(event, context):
     job_id = str(uuid.uuid4())
     file_object_list = []
+    file_metadata_list = []
     
     # Use the default keys (which are set to large files)
     keys_to_use = HARDCODED_KEYS
@@ -88,6 +153,12 @@ def lambda_handler(event, context):
 
     errors = []
     for key in keys_to_use:
+        # Get metadata first
+        metadata = get_s3_object_metadata(s3_bucket, key)
+        if metadata:
+            file_metadata_list.append(metadata)
+        
+        # Generate presigned URL
         presigned_url = generate_presigned_url(s3_bucket, key)
         
         if not presigned_url:
@@ -110,11 +181,16 @@ def lambda_handler(event, context):
         
         logger.info(f"Added file {file_name} with presigned URL (first 50 chars): {presigned_url[:50]}...")
 
+    # Generate a simple random hash for testing
+    files_hash = generate_files_hash(None)
+    
+    # Simplified job request without metadata
     job_request = {
         "JobRequest": {
             "job_id": job_id,
             "file_object": file_object_list,
-            "call_url_when_done_with_job_id": CALLBACK_URL.format(job_id=job_id)
+            "call_url_when_done_with_job_id": CALLBACK_URL.format(job_id=job_id),
+            "files_hash": files_hash
         }
     }
 
@@ -161,7 +237,8 @@ def lambda_handler(event, context):
         "job_id": job_id,
         "job_file_s3_key": job_file_key,
         "job_file_download_url": job_file_presigned_url,
-        "files_count": len(file_object_list)
+        "files_count": len(file_object_list),
+        "files_hash": files_hash
     }
     
     # Add errors to the response if any occurred

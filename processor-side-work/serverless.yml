@@ -1,0 +1,32 @@
+service: job-processor
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.9
+  region: us-east-1
+  memorySize: 256
+  timeout: 30
+  environment:
+    API_URL: https://yknlfsjyye.execute-api.us-east-1.amazonaws.com/dev/prepare-job
+
+functions:
+  getOneJob:
+    handler: handler_get_one_job.get_one_job
+    description: Fetches a job from the prepare-job API
+    events:
+      - http:
+          path: get-job
+          method: get
+          cors: true
+
+package:
+  patterns:
+    - '!node_modules/**'
+    - '!.git/**'
+    - '!.env'
+    - '!process_work/**'
+    - '!__pycache__/**'
+    - '!*.zip'
+    - '!*.log'

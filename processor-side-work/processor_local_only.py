@@ -8,6 +8,8 @@ import zipfile
 import shutil
 import threading
 import queue
+import glob
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
@@ -21,10 +23,52 @@ except ImportError:
     logging.warning("psutil module not found. System statistics will not be available.")
 
 # Configuration
-SIMULTANEOUS_DOWNLOADS_MAX =  4  # Number of files to download simultaneously
+SIMULTANEOUS_DOWNLOADS_MAX = 4  # Number of files to download simultaneously
 
 # Constants
 API_URL = "https://yknlfsjyye.execute-api.us-east-1.amazonaws.com/dev/prepare-job"
+PROCESS_WORK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "process_work")
+
+def step0_check_job_already_processed(job_id):
+    """
+    Check if a job has already been processed by looking for existing folders and log files
+    Returns (is_processed, folder_path) where:
+        is_processed: True if the job has been processed, False otherwise
+        folder_path: Path to the existing folder if processed, None otherwise
+    """
+    # Make sure the process_work directory exists
+    if not os.path.exists(PROCESS_WORK_DIR):
+        return False, None
+    
+    # Look for folders containing the job_id
+    potential_folders = glob.glob(os.path.join(PROCESS_WORK_DIR, f"*-{job_id}"))
+    
+    for folder_path in potential_folders:
+        # Check if this is a directory
+        if not os.path.isdir(folder_path):
+            continue
+            
+        # Check for the log file
+        log_file = os.path.join(folder_path, f"{job_id}_log_file.txt")
+        if os.path.exists(log_file):
+            # Check if the job was completed successfully
+            try:
+                with open(log_file, 'r') as f:
+                    log_content = f.read()
+                    if "Process completed successfully" in log_content:
+                        logging.info(f"Job {job_id} was already processed successfully. Found in folder: {folder_path}")
+                        return True, folder_path
+            except Exception as e:
+                logging.warning(f"Error reading log file {log_file}: {str(e)}")
+                
+        # Check for the zip file
+        zip_file = os.path.join(folder_path, f"{job_id}_archive.zip")
+        if os.path.exists(zip_file):
+            logging.info(f"Job {job_id} appears to be processed. Found zip file: {zip_file}")
+            return True, folder_path
+    
+    # Job not found
+    return False, None
 
 def setup_logging(job_id, local_folder_path):
     """Set up logging to both console and file"""
@@ -61,7 +105,7 @@ def setup_logging(job_id, local_folder_path):
     
     return log_file
 
-def step_1_fetch_job_details():
+def step1_fetch_job_details(job_id=None):
     """Step 1: Fetch job details from the API"""
     logging.info(f"Fetching job details from {API_URL}")
     try:
@@ -114,7 +158,7 @@ def step_1_fetch_job_details():
         logging.error(f"URL Error: {e.reason}")
         raise Exception(f"URL Error: {e.reason}")
 
-def step_2_fetch_job_file(url):
+def step2_fetch_job_file(job_id, url):
     """Step 2: Fetch the job file using the presigned URL"""
     logging.info(f"Fetching job file from presigned URL")
     try:
@@ -135,7 +179,7 @@ def step_2_fetch_job_file(url):
         logging.error(f"URL Error: {e.reason}")
         raise Exception(f"URL Error: {e.reason}")
 
-def step_4_create_files_subfolder(local_folder_path, job_id):
+def step4_create_files_subfolder(local_folder_path, job_id):
     """Step 4: Create a subfolder for the job files"""
     # Create subfolder with just the job_id
     files_folder_path = os.path.join(local_folder_path, job_id)
@@ -205,7 +249,7 @@ def download_single_file(file_obj, files_folder_path, index, total_files, max_re
             import time
             time.sleep(retry_wait)
 
-def step_5_download_files(job_data, files_folder_path, max_retries=1):
+def step5_download_files(job_id, job_data, files_folder_path, max_retries=1):
     """Step 5: Download all files from the presigned URLs using parallel downloads"""
     # Record start time for downloads
     download_start_time = datetime.now()
@@ -286,7 +330,7 @@ def step_5_download_files(job_data, files_folder_path, max_retries=1):
     
     return downloaded_files
 
-def step_6_zip_folder(local_folder_path, job_id):
+def step6_zip_folder(local_folder_path, job_id):
     """Step 6: Zip the entire folder"""
     # Create zip file path in the timestamped job folder
     zip_file_path = os.path.join(local_folder_path, f"{job_id}_archive.zip")
@@ -366,7 +410,7 @@ def step_6_zip_folder(local_folder_path, job_id):
             logging.error(f"Error in fallback zip method: {str(e2)}")
             return None, 0, 0, 0
 
-def step_7_get_upload_url_and_upload(callback_url, zip_file_path):
+def step7_get_upload_url_and_upload(job_id, callback_url, zip_file_path):
     """Step 7: Get upload URL and upload the zip file"""
     logging.info(f"Getting upload URL from: {callback_url}")
     
@@ -426,19 +470,21 @@ def step_7_get_upload_url_and_upload(callback_url, zip_file_path):
         logging.error(f"Error in step 7: {str(e)}")
         return False, None
 
-def main_process_job():
-    """Main function to orchestrate the job processing steps"""
+def step3_process_one_job(job_id, job_file_download_url):
+    """Step 3: Process a single job with the given job_id and download URL"""
     # Record start time
     start_time = datetime.now()
     
     try:
-        # Step 1: Fetch job details from API
-        job_details = step_1_fetch_job_details()
-        job_id = job_details.get('job_id')
-        job_file_download_url = job_details.get('job_file_download_url')
-        
-        if not job_id or not job_file_download_url:
-            raise Exception("Missing job_id or job_file_download_url in response")
+        # Step 0: Check if this job has already been processed
+        already_processed, existing_folder = step0_check_job_already_processed(job_id)
+        if already_processed:
+            logging.info(f"Job {job_id} has already been processed. Skipping.")
+            return {
+                "job_id": job_id,
+                "already_processed": True,
+                "existing_folder": existing_folder
+            }
         
         # Create timestamp folder first (we need this for logging)
         # Get current timestamp in yymmddhhmmss format
@@ -448,7 +494,7 @@ def main_process_job():
         folder_name = f"{timestamp}-{job_id}"
         
         # Create local folder
-        local_folder_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "process_work", folder_name)
+        local_folder_path = os.path.join(PROCESS_WORK_DIR, folder_name)
         os.makedirs(local_folder_path, exist_ok=True)
         print(f"Created local folder: {local_folder_path}")
         
@@ -458,8 +504,34 @@ def main_process_job():
         logging.info(f"Using download URL: {job_file_download_url}")
         
         # Step 2: Fetch the job file using the presigned URL
-        job_file_data = step_2_fetch_job_file(job_file_download_url)
+        job_file_data = step2_fetch_job_file(job_id, job_file_download_url)
         
+        # Continue with job processing...
+        return process_job_data(job_id, job_file_data, local_folder_path, log_file, start_time)
+        
+    except Exception as e:
+        # Calculate elapsed time even in case of error
+        end_time = datetime.now()
+        elapsed_time = end_time - start_time
+        elapsed_seconds = elapsed_time.total_seconds()
+        
+        if 'logging' in sys.modules and logging.getLogger().handlers:
+            logging.error(f"Error processing job {job_id}: {str(e)}")
+            logging.info(f"Failed processing time: {elapsed_seconds:.2f} seconds ({elapsed_time})")
+        else:
+            print(f"Error processing job {job_id}: {str(e)}")
+            print(f"Failed processing time: {elapsed_seconds:.2f} seconds")
+        
+        # Don't re-raise to prevent script from crashing
+        return {
+            "job_id": job_id,
+            "error": str(e),
+            "processing_time_seconds": elapsed_seconds
+        }
+
+def process_job_data(job_id, job_file_data, local_folder_path, log_file, start_time):
+    """Process the job data after it has been fetched"""
+    try:
         # Validate job file data
         if not job_file_data:
             raise Exception("Empty job file data received")
@@ -474,13 +546,13 @@ def main_process_job():
         logging.info(f"Saved job details to local file: {local_file_path}")
         
         # Step 4: Create a subfolder for the job files
-        files_folder_path = step_4_create_files_subfolder(local_folder_path, job_id)
+        files_folder_path = step4_create_files_subfolder(local_folder_path, job_id)
         
         # Step 5: Download all files from the presigned URLs
-        downloaded_files = step_5_download_files(job_file_data, files_folder_path)
+        downloaded_files = step5_download_files(job_id, job_file_data, files_folder_path)
         
         # Step 6: Zip the entire folder
-        zip_result = step_6_zip_folder(local_folder_path, job_id)
+        zip_result = step6_zip_folder(local_folder_path, job_id)
         
         if not zip_result or not zip_result[0]:
             raise Exception("Failed to create zip archive")
@@ -497,7 +569,7 @@ def main_process_job():
         logging.info(f"Callback URL: {callback_url}")
         
         # Step 7: Get upload URL and upload the zip file
-        upload_success, s3_key = step_7_get_upload_url_and_upload(callback_url, zip_file_path)
+        upload_success, s3_key = step7_get_upload_url_and_upload(job_id, callback_url, zip_file_path)
         
         if not upload_success:
             raise Exception("Failed to upload zip file")
@@ -537,28 +609,124 @@ def main_process_job():
         elapsed_seconds = elapsed_time.total_seconds()
         
         if 'logging' in sys.modules and logging.getLogger().handlers:
-            logging.error(f"Error processing job: {str(e)}")
+            logging.error(f"Error processing job {job_id}: {str(e)}")
             logging.info(f"Failed processing time: {elapsed_seconds:.2f} seconds ({elapsed_time})")
         else:
-            print(f"Error processing job: {str(e)}")
+            print(f"Error processing job {job_id}: {str(e)}")
             print(f"Failed processing time: {elapsed_seconds:.2f} seconds")
         
         # Don't re-raise to prevent script from crashing
         return {
+            "job_id": job_id,
             "error": str(e),
             "processing_time_seconds": elapsed_seconds
         }
 
+def do_work(thread_id):
+    """Function to fetch and process one job in a separate thread"""
+    try:
+        logging.info(f"Thread {thread_id}: Starting job processing")
+        
+        # Step 1: Fetch job details from API
+        job_details = step1_fetch_job_details(None)
+        job_id = job_details.get('job_id')
+        job_file_download_url = job_details.get('job_file_download_url')
+        
+        if not job_id or not job_file_download_url:
+            logging.error(f"Thread {thread_id}: Missing job_id or job_file_download_url in response")
+            return {
+                "thread_id": thread_id,
+                "error": "Missing job_id or job_file_download_url in response"
+            }
+        
+        logging.info(f"Thread {thread_id}: Processing job {job_id}")
+        
+        # Step 3: Process the job
+        result = step3_process_one_job(job_id, job_file_download_url)
+        result["thread_id"] = thread_id
+        return result
+        
+    except Exception as e:
+        logging.error(f"Thread {thread_id}: Error processing job: {str(e)}")
+        return {
+            "thread_id": thread_id,
+            "error": str(e)
+        }
+
+def main_process_job():
+    """Main function to orchestrate the job processing steps"""
+    # Record start time
+    start_time = datetime.now()
+    
+    # Create threads to process multiple jobs
+    threads = []
+    results = []
+    
+    logging.info("Starting 3 job processing threads with 3-second intervals")
+    
+    for i in range(3):
+        # Create a thread for this job
+        thread = threading.Thread(target=lambda idx=i, res=results: res.append(do_work(idx+1)))
+        threads.append(thread)
+        
+        # Start the thread
+        thread.start()
+        logging.info(f"Started thread {i+1}")
+        
+        # Wait 3 seconds before starting the next thread (except for the last one)
+        if i < 2:
+            logging.info(f"Waiting 3 seconds before starting thread {i+2}")
+            time.sleep(3)
+    
+    # Wait for all threads to complete
+    for i, thread in enumerate(threads):
+        thread.join()
+        logging.info(f"Thread {i+1} completed")
+    
+    # Calculate total elapsed time
+    end_time = datetime.now()
+    elapsed_time = end_time - start_time
+    elapsed_seconds = elapsed_time.total_seconds()
+    
+    logging.info(f"All threads completed. Total time: {elapsed_seconds:.2f} seconds")
+    
+    # Return the results from all threads
+    return {
+        "thread_count": len(threads),
+        "results": results,
+        "total_time_seconds": elapsed_seconds
+    }
+
 if __name__ == "__main__":
     try:
+        # Configure basic logging before threads start
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler()
+            ]
+        )
+        
+        # Run the main process with multiple threads
         result = main_process_job()
-        if "error" in result:
-            logging.error(f"Process completed with error: {result['error']}")
-        else:
-            logging.info(f"Process completed successfully for job: {result['job_id']}")
+        
+        # Log summary of results
+        logging.info(f"Processed {result['thread_count']} jobs in {result['total_time_seconds']:.2f} seconds")
+        
+        # Log individual thread results
+        for thread_result in result.get('results', []):
+            thread_id = thread_result.get('thread_id')
+            if "error" in thread_result:
+                logging.error(f"Thread {thread_id} completed with error: {thread_result['error']}")
+            elif thread_result.get("already_processed"):
+                logging.info(f"Thread {thread_id}: Job {thread_result['job_id']} was already processed")
+            else:
+                logging.info(f"Thread {thread_id}: Successfully processed job {thread_result.get('job_id')}")
+                
     except KeyboardInterrupt:
         logging.warning("\nProcess interrupted by user")
     except Exception as e:
-        print(f"Unhandled exception: {str(e)}")
+        logging.error(f"Unhandled exception: {str(e)}")
     finally:
-        logging.info("Process finished")
+        logging.info("All processing finished")
